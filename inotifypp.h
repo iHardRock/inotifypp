@@ -273,6 +273,16 @@ namespace inotifypp {
         return old_path_;
       }
 
+      //! Get folder path for event
+      const std::string getFolderPath() const {
+        return path_.substr(0, path_.find_last_of("/\\"));
+      }
+
+      //! Get file name for event
+      const std::string getFileName() const {
+        return path_.substr(path_.find_last_of("/\\") + 1);
+      }
+
     private:
 
       //! Event type
