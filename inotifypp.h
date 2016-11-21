@@ -24,6 +24,8 @@
   #include <activity.h>
 #endif
 
+#define MAX_EVENTS_PER_READ 1024
+
 namespace inotifypp {
 
   //! Inotify monitor class
@@ -246,16 +248,18 @@ namespace inotifypp {
     public:
 
       //! Constructor
-      Event(Type event_type, const std::string& path)
+      Event(Type event_type, const std::string& path, bool is_dirrectory)
       : type_(event_type)
       , path_(path)
+      , is_dirrectory_(is_dirrectory)
       {}
 
       //! Constructor
-      Event(Type event_type, const std::string& old_path, const std::string& new_path)
+      Event(Type event_type, const std::string& old_path, const std::string& new_path, bool is_dirrectory)
       : type_(event_type)
       , path_(new_path)
       , old_path_(old_path)
+      , is_dirrectory_(is_dirrectory)
       {}
 
       //! Get event type
@@ -283,6 +287,11 @@ namespace inotifypp {
         return path_.substr(path_.find_last_of("/\\") + 1);
       }
 
+      //! Check is target was dirrectory
+      const bool isDirrectory() const {
+        return is_dirrectory_;
+      }
+
     private:
 
       //! Event type
@@ -293,6 +302,9 @@ namespace inotifypp {
 
       //! Old event path for [Moved] event only
       std::string   old_path_;
+
+      //! Is event on directory
+      bool          is_dirrectory_;
     };
 
 
@@ -642,8 +654,8 @@ namespace inotifypp {
      * @brief Update monitoring
      */
     void update() {
-      // - Buffer for inotify events (up to 256 events)
-      char  buffer[sizeof(inotify_event) * 256] __attribute__ ((aligned(__alignof__(struct inotify_event))));
+      // - Buffer for inotify events (up to MAX_EVENTS_PER_READ events)
+      char  buffer[sizeof(inotify_event) * MAX_EVENTS_PER_READ] __attribute__ ((aligned(__alignof__(struct inotify_event))));
       const inotify_event* event = nullptr;
 
       // - Poll inotify desctiptor
@@ -670,7 +682,7 @@ namespace inotifypp {
             }
             // - Fire DELETE event
             { std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-              outgoing_events_.push(std::make_shared<Event>(Event::Type::Deleted, remove_path));
+              outgoing_events_.push(std::make_shared<Event>(Event::Type::Deleted, remove_path, ((event->mask & IN_ISDIR) != 0)));
             }
           } else if(!m_event->getOldWatch() && m_event->getNewWatch()) {
             // - File was move into scope. Assume create.
@@ -682,7 +694,7 @@ namespace inotifypp {
             }
             // - Fire CREATE event
             { std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-              outgoing_events_.push(std::make_shared<Event>(Event::Type::Created, create_path));
+              outgoing_events_.push(std::make_shared<Event>(Event::Type::Created, create_path, ((event->mask & IN_ISDIR) != 0)));
             }
           }
 
@@ -803,13 +815,13 @@ namespace inotifypp {
               new_path = Watch::getWatchPath(object);
               if (user_mask & IN_MOVE) {
                 std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-                outgoing_events_.push(std::make_shared<Event>(Event::Type::Moved, old_path, new_path));
+                outgoing_events_.push(std::make_shared<Event>(Event::Type::Moved, old_path, new_path, ((event->mask & IN_ISDIR) != 0)));
               }
             } else {
               new_path = Watch::getWatchPath(pending_event->getNewWatch()) + "/" + pending_event->getNewName();
               if (user_mask & IN_MOVE) {
                 std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-                outgoing_events_.push(std::make_shared<Event>(Event::Type::Moved, old_path, new_path));
+                outgoing_events_.push(std::make_shared<Event>(Event::Type::Moved, old_path, new_path, ((event->mask & IN_ISDIR) != 0)));
               }
             }
           }
@@ -862,13 +874,13 @@ namespace inotifypp {
               new_path = Watch::getWatchPath(object);
               if (user_mask & IN_MOVE) {
                 std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-                outgoing_events_.push(std::make_shared<Event>(Event::Type::Moved, old_path, new_path));
+                outgoing_events_.push(std::make_shared<Event>(Event::Type::Moved, old_path, new_path, ((event->mask & IN_ISDIR) != 0)));
               }
             } else {
               new_path = Watch::getWatchPath(pending_event->getNewWatch()) + "/" + pending_event->getNewName();
               if (user_mask & IN_MOVE) {
                 std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-                outgoing_events_.push(std::make_shared<Event>(Event::Type::Moved, old_path, new_path));
+                outgoing_events_.push(std::make_shared<Event>(Event::Type::Moved, old_path, new_path, ((event->mask & IN_ISDIR) != 0)));
               }
             }
           }
@@ -881,53 +893,53 @@ namespace inotifypp {
         // -----------------------------------------------------------------------------
         if (event->mask & IN_CREATE && user_mask & IN_CREATE) {
           std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-          outgoing_events_.push(std::make_shared<Event>(Event::Type::Created, event_path));
+          outgoing_events_.push(std::make_shared<Event>(Event::Type::Created, event_path, ((event->mask & IN_ISDIR) != 0)));
         // -----------------------------------------------------------------------------
         // --- DELETE
         // -----------------------------------------------------------------------------
         } else if (event->mask & IN_DELETE && user_mask & IN_DELETE) {
           std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-          outgoing_events_.push(std::make_shared<Event>(Event::Type::Deleted, event_path));
+          outgoing_events_.push(std::make_shared<Event>(Event::Type::Deleted, event_path, ((event->mask & IN_ISDIR) != 0)));
         // -----------------------------------------------------------------------------
         // --- OPEN
         // -----------------------------------------------------------------------------
         } else if (event->mask & IN_OPEN && user_mask & IN_OPEN) {
           std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-          outgoing_events_.push(std::make_shared<Event>(Event::Type::Opened, event_path));
+          outgoing_events_.push(std::make_shared<Event>(Event::Type::Opened, event_path, ((event->mask & IN_ISDIR) != 0)));
         // -----------------------------------------------------------------------------
         // --- ACCESS
         // -----------------------------------------------------------------------------
         } else if (event->mask & IN_ACCESS && user_mask & IN_ACCESS) {
           std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-          outgoing_events_.push(std::make_shared<Event>(Event::Type::Accessed, event_path));
+          outgoing_events_.push(std::make_shared<Event>(Event::Type::Accessed, event_path, ((event->mask & IN_ISDIR) != 0)));
 
         // -----------------------------------------------------------------------------
         // --- ATTRIB
         // -----------------------------------------------------------------------------
         } else if (event->mask & IN_ATTRIB && user_mask & IN_ATTRIB) {
           std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-          outgoing_events_.push(std::make_shared<Event>(Event::Type::AttributeChanged, event_path));
+          outgoing_events_.push(std::make_shared<Event>(Event::Type::AttributeChanged, event_path, ((event->mask & IN_ISDIR) != 0)));
 
         // -----------------------------------------------------------------------------
         // --- CLOSE / WRITE
         // -----------------------------------------------------------------------------
         } else if (event->mask & IN_CLOSE_WRITE && user_mask & IN_CLOSE_WRITE) {
           std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-          outgoing_events_.push(std::make_shared<Event>(Event::Type::ClosedWrite, event_path));
+          outgoing_events_.push(std::make_shared<Event>(Event::Type::ClosedWrite, event_path, ((event->mask & IN_ISDIR) != 0)));
 
         // -----------------------------------------------------------------------------
         // --- CLOSE / NO WRITE
         // -----------------------------------------------------------------------------
         } else if (event->mask & IN_CLOSE_NOWRITE && user_mask & IN_CLOSE_NOWRITE) {
           std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-          outgoing_events_.push(std::make_shared<Event>(Event::Type::ClosedNoWrite, event_path));
+          outgoing_events_.push(std::make_shared<Event>(Event::Type::ClosedNoWrite, event_path, ((event->mask & IN_ISDIR) != 0)));
 
         // -----------------------------------------------------------------------------
         // --- MODIFY
         // -----------------------------------------------------------------------------
         } else if (event->mask & IN_MODIFY && user_mask & IN_MODIFY) {
           std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-          outgoing_events_.push(std::make_shared<Event>(Event::Type::Modified, event_path));
+          outgoing_events_.push(std::make_shared<Event>(Event::Type::Modified, event_path, ((event->mask & IN_ISDIR) != 0)));
         }
       }
     }
