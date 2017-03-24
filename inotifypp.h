@@ -319,9 +319,10 @@ namespace inotifypp {
     public:
 
       //! Constructor
-      MoveEvent(int cookie)
+      MoveEvent(int cookie, bool is_dir)
       : event_cookie_(cookie)
       , expire_at_(std::chrono::system_clock::now() + std::chrono::seconds(2))
+      , is_dir_(is_dir)
       {}
 
       //! Get event cookie
@@ -347,6 +348,11 @@ namespace inotifypp {
       //! Get associated old watch
       Watch::ptr getOldWatch() const {
         return old_watch_;
+      }
+
+      //! Get is event for directory or not
+      bool isDirrectory() const {
+        return is_dir_;
       }
 
     private:
@@ -395,6 +401,9 @@ namespace inotifypp {
 
       //! Pairing timeout
       std::chrono::time_point<std::chrono::system_clock>  expire_at_;
+
+      //! Is dirrectory
+      bool                                                is_dir_;
     };
 
   public:
@@ -485,6 +494,7 @@ namespace inotifypp {
 
     //! Add watch
     virtual bool addWatch(const std::string& path, std::uint32_t mask, bool recursive) {
+      printf("> ADD WATCH: %s\n", path.c_str());
       // - Create internal mask
       std::uint32_t internal_mask = mask
         | IN_DELETE_SELF
@@ -582,6 +592,7 @@ namespace inotifypp {
      * @return true on success
      */
     virtual bool removeWatch(const std::string& path, bool recursive) {
+      printf("> REMOVE WATCH: %s\n", path.c_str());
       // - Get real path for source path
       char* real_path = realpath(path.c_str(), 0);
       std::string watch_path;
@@ -670,6 +681,7 @@ namespace inotifypp {
           // - Reinterpret move action
           MoveEvent::ptr m_event = i_event.second;
 
+          // - Event has old watch and don't have new watch -> Moving out of scope
           if (m_event->getOldWatch() && !m_event->getNewWatch()) {
             std::string remove_path;
             // - File was moved out from scope. Assume delete.
@@ -682,8 +694,10 @@ namespace inotifypp {
             }
             // - Fire DELETE event
             { std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-              outgoing_events_.push(std::make_shared<Event>(Event::Type::Deleted, remove_path, ((event->mask & IN_ISDIR) != 0)));
+              outgoing_events_.push(std::make_shared<Event>(Event::Type::Deleted, remove_path, m_event->isDirrectory() ));
             }
+
+          // - Event has new watch and don't have old watch -> Moving into scope
           } else if(!m_event->getOldWatch() && m_event->getNewWatch()) {
             // - File was move into scope. Assume create.
             std::string create_path = Watch::getWatchPath(m_event->getNewWatch()) + "/" + m_event->getNewName();
@@ -694,7 +708,7 @@ namespace inotifypp {
             }
             // - Fire CREATE event
             { std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
-              outgoing_events_.push(std::make_shared<Event>(Event::Type::Created, create_path, ((event->mask & IN_ISDIR) != 0)));
+              outgoing_events_.push(std::make_shared<Event>(Event::Type::Created, create_path, m_event->isDirrectory()));
             }
           }
 
@@ -785,7 +799,7 @@ namespace inotifypp {
           // - Check is event exist
           if (!pending_event) {
             // - Create new event
-            pending_event = std::make_shared<MoveEvent>(event->cookie);
+            pending_event = std::make_shared<MoveEvent>(event->cookie, ((event->mask & IN_ISDIR) != 0));
             pending_event->__setOldName__(event_name);
             pending_event->__setOldWatch__(watch);
             { std::lock_guard<std::mutex> lock(pending_events_mutex_);
@@ -843,7 +857,7 @@ namespace inotifypp {
           // - Check is event exist
           if (!pending_event) {
             // - Create new even
-            pending_event = std::make_shared<MoveEvent>(event->cookie);
+            pending_event = std::make_shared<MoveEvent>(event->cookie, ((event->mask & IN_ISDIR) != 0));
             pending_event->__setNewName__(event_name);
             pending_event->__setNewWatch__(watch);
             { std::lock_guard<std::mutex> lock(pending_events_mutex_);
