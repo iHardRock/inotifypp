@@ -494,7 +494,6 @@ namespace inotifypp {
 
     //! Add watch
     virtual bool addWatch(const std::string& path, std::uint32_t mask, bool recursive) {
-      printf("> ADD WATCH: %s\n", path.c_str());
       // - Create internal mask
       std::uint32_t internal_mask = mask
         | IN_DELETE_SELF
@@ -580,6 +579,7 @@ namespace inotifypp {
           closedir(dir);
         }
       }
+
       return true;
     }
 
@@ -592,7 +592,6 @@ namespace inotifypp {
      * @return true on success
      */
     virtual bool removeWatch(const std::string& path, bool recursive) {
-      printf("> REMOVE WATCH: %s\n", path.c_str());
       // - Get real path for source path
       char* real_path = realpath(path.c_str(), 0);
       std::string watch_path;
@@ -672,7 +671,7 @@ namespace inotifypp {
       // - Poll inotify desctiptor
       int poll_result = epoll_wait(poll_descriptor_, &poll_event_, 1, 0);
       if (poll_result == -1) return;
-      if (poll_result == 0) {
+      {
         // - Check pending events
         std::chrono::time_point<std::chrono::system_clock> current_timestamp = std::chrono::system_clock::now();
         std::set<int> processed_events;
@@ -718,8 +717,10 @@ namespace inotifypp {
         for (auto& i_event : processed_events) {
           pending_events_.erase(i_event);
         }
-        return;
+        //return;
       }
+
+      if (poll_result == 0)  return;
 
       // - Read inotify events
       std::size_t bytes_read = ::read(inotify_descriptor_, buffer, sizeof(buffer));
@@ -730,6 +731,7 @@ namespace inotifypp {
         // - Setup event
         event = reinterpret_cast<const inotify_event*>(pointer);
 
+
         // - Find associated watch
         Watch::ptr watch = nullptr;
         { std::lock_guard<std::mutex> lock(watches_mutex_);
@@ -738,6 +740,7 @@ namespace inotifypp {
           if (i_watch == watches_.end()) continue;
           watch = i_watch->second;
         }
+
 
         // - Get event name
         std::string event_name;
@@ -878,20 +881,29 @@ namespace inotifypp {
               // - Detach from old watch
               pending_event->getOldWatch()->getChildrenWatches().erase(i_child);
 
-              // - Attach to new watch
-              pending_event->getNewWatch()->getChildrenWatches()[pending_event->getNewName()] = object;
-              object->__setParent__(pending_event->getNewWatch());
+              // - Remove old watch
+              removeWatch(Watch::getWatchPath(object), pending_event->getOldWatch()->isRecursive());
 
-              // - Fix name
-              object->__setName__(pending_event->getNewName());
+              // --- Maybe we are missed to install watch for old name
+              // - (in case of fast create -> rename operations)
+              new_path = Watch::getWatchPath(pending_event->getNewWatch()) + "/" + pending_event->getNewName();
 
-              new_path = Watch::getWatchPath(object);
+              // - Install new watch
+              addWatch(new_path, pending_event->getOldWatch()->getMask(), pending_event->getNewWatch()->isRecursive());
+
               if (user_mask & IN_MOVE) {
                 std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
                 outgoing_events_.push(std::make_shared<Event>(Event::Type::Moved, old_path, new_path, ((event->mask & IN_ISDIR) != 0)));
               }
             } else {
+              // --- Maybe we are missed to install watch for old name
+              // - (in case of fast create -> rename operations)
               new_path = Watch::getWatchPath(pending_event->getNewWatch()) + "/" + pending_event->getNewName();
+
+              // - Install new watch
+              addWatch(new_path, pending_event->getOldWatch()->getMask(), pending_event->getNewWatch()->isRecursive());
+
+              // - Fire user event
               if (user_mask & IN_MOVE) {
                 std::lock_guard<std::recursive_mutex> lock(outgoing_events_mutex_);
                 outgoing_events_.push(std::make_shared<Event>(Event::Type::Moved, old_path, new_path, ((event->mask & IN_ISDIR) != 0)));
