@@ -1098,7 +1098,6 @@ namespace inotifypp {
     //! Monitoring activity
     void __mointorActivity__() {
       while (monitor_activity_.running()) {
-        monitor_activity_.__cancel_point__();
         update();
       }
     }
